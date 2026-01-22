@@ -1,0 +1,18 @@
+# CV AI Agent - Production Dependencies
+# Pinned versions for reproducibility
+# Generated for deployment pipelines
+
+# Web Framework
+Flask==2.3.3
+
+# WSGI Server (production)
+gunicorn==21.2.0
+
+# Environment management
+python-dotenv==1.0.0
+
+# Security
+Werkzeug==2.3.7
+
+# DO NOT ADD development dependencies here
+# Testing tools go in requirements-dev.txt if needed    
