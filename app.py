@@ -1,149 +1,167 @@
 """
 CV AI Agent - Core Application
-Entry point for the CV improvement AI agent system.
+Updated to integrate centralized environment configuration loader.
 """
 
 import os
+import logging
+import logging.config
+from pathlib import Path
 from flask import Flask, jsonify, request
 from werkzeug.exceptions import HTTPException
+from .config import DevelopmentConfig, TestingConfig, ProductionConfig
+
+
+# ====================
+# LOGGING CONFIGURATION
+# ====================
+
+def setup_logging(level=None):
+    """
+    Initialize logging configuration from logging.conf.
+    Falls back to basic config if file not found.
+    Uses level from configuration if provided.
+    """
+    try:
+        config_path = Path(__file__).parent / 'logging.conf'
+        if config_path.exists():
+            logging.config.fileConfig(config_path, disable_existing_loggers=False)
+            logger = logging.getLogger("app")
+            logger.info(f"Loaded logging configuration from: {config_path}")
+        else:
+            logging.basicConfig(
+                level=level or logging.INFO,
+                format='%(asctime)s [%(levelname)s] %(name)s - %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
+            logger = logging.getLogger("app")
+            logger.warning(f"logging.conf not found at {config_path}, using basic logging")
+        return logger
+    except Exception as e:
+        logging.basicConfig(level=logging.WARNING)
+        logger = logging.getLogger("app")
+        logger.error(f"Failed to setup logging: {str(e)}")
+        return logger
+
+# ====================
+# CONFIGURATION LOADER
+# ====================
+
+def get_config():
+    """
+    Select configuration class based on environment variable:
+    FLASK_ENV or APP_ENV (development, testing, production)
+    Defaults to DevelopmentConfig.
+    """
+    env = os.environ.get("FLASK_ENV") or os.environ.get("APP_ENV", "development")
+    env = env.lower()
+    if env == "production":
+        return ProductionConfig
+    elif env == "testing":
+        return TestingConfig
+    else:
+        return DevelopmentConfig
+
+# Initialize config and logging
+ConfigClass = get_config()
+logger = setup_logging(getattr(ConfigClass, "LOG_LEVEL", None))
 
 # ====================
 # APPLICATION FACTORY
 # ====================
 
-def create_app(config_name=None):
+def create_app(config_class=None):
     """
-    Application factory pattern.
-    Allows different configurations for dev, test, production.
+    Flask application factory.
+    Automatically applies selected configuration and logging.
     """
     app = Flask(__name__)
-    
-    # ====================
-    # CONFIGURATION
-    # ====================
-    
-    # Default configuration (development)
-    app.config.update(
-        DEBUG=os.environ.get('FLASK_DEBUG', 'True') == 'True',
-        SECRET_KEY=os.environ.get('SECRET_KEY', 'dev-key-change-in-production'),
-        JSON_SORT_KEYS=False,  # Maintain dictionary order
-        JSONIFY_PRETTYPRINT_REGULAR=True
-    )
-    
+
+    # Apply configuration
+    config_class = config_class or ConfigClass
+    try:
+        app.config.from_object(config_class)
+    except RuntimeError as e:
+        logger.error(f"Failed to load configuration: {e}")
+        raise
+
+    logger.info(f"Starting CV AI Agent with config: {config_class.__name__}")
+    logger.info(f"Environment: {os.environ.get('FLASK_ENV', os.environ.get('APP_ENV', 'development'))}")
+
     # ====================
     # HEALTH & READINESS
     # ====================
-    
-    @app.route('/')
+    @app.route("/")
     def home():
-        """Root endpoint - service greeting"""
+        logger.debug("Root endpoint accessed")
         return jsonify({
-            'service': 'CV AI Agent',
-            'version': '1.0.0',
-            'status': 'operational',
-            'message': 'Hello! I am your baby AI agent 🤖'
+            "service": "CV AI Agent",
+            "version": "1.0.0",
+            "status": "operational",
+            "message": "Hello! I am your baby AI agent 🤖"
         })
-    
-    @app.route('/health')
+
+    @app.route("/health")
     def health_check():
-        """Health check endpoint for deployment monitoring"""
-        return jsonify({
-            'status': 'healthy',
-            'timestamp': os.environ.get('DEPLOY_TIMESTAMP', 'local-dev')
-        }), 200
-    
-    @app.route('/ready')
+        logger.debug("Health check requested")
+        return jsonify({"status": "healthy"}), 200
+
+    @app.route("/ready")
     def readiness_check():
-        """Readiness check for load balancers"""
-        # Add dependency checks here later (database, APIs, etc.)
-        return jsonify({'ready': True}), 200
-    
+        logger.debug("Readiness check requested")
+        return jsonify({"ready": True}), 200
+
     # ====================
     # ERROR HANDLERS
     # ====================
-    
     @app.errorhandler(404)
     def not_found(error):
-        """Handle 404 - Not Found"""
-        return jsonify({
-            'error': 'Not Found',
-            'message': 'The requested resource does not exist',
-            'path': request.path if request else 'unknown'
-        }), 404
-    
+        logger.warning(f"404 Not Found: {request.path}")
+        return jsonify({"error": "Not Found", "message": "Resource does not exist", "path": request.path}), 404
+
     @app.errorhandler(500)
     def internal_error(error):
-        """Handle 500 - Internal Server Error"""
-        # Log the error here (to be implemented)
-        return jsonify({
-            'error': 'Internal Server Error',
-            'message': 'An unexpected error occurred',
-            'reference_id': 'ERR-500'  # Add logging reference later
-        }), 500
-    
+        logger.error(f"500 Internal Server Error: {error}", exc_info=True)
+        return jsonify({"error": "Internal Server Error", "message": "Unexpected error occurred"}), 500
+
     @app.errorhandler(HTTPException)
     def handle_http_exception(error):
-        """Handle all HTTP exceptions consistently"""
-        return jsonify({
-            'error': error.name,
-            'message': error.description,
-            'code': error.code
-        }), error.code
-    
+        if error.code >= 500:
+            logger.error(f"HTTP {error.code}: {error.name} - {error.description}")
+        elif error.code >= 400:
+            logger.warning(f"HTTP {error.code}: {error.name} - {error.description}")
+        return jsonify({"error": error.name, "message": error.description, "code": error.code}), error.code
+
     # ====================
-    # APPLICATION HOOKS
+    # HOOKS
     # ====================
-    
     @app.before_request
     def before_request():
-        """Execute before each request"""
-        # Add request logging, authentication, etc. here
-        pass
-    
+        logger.debug(f"Incoming request: {request.method} {request.path}")
+
     @app.after_request
     def after_request(response):
-        """Execute after each request"""
-        # Add CORS headers, response logging, etc. here
         response.headers['X-Service'] = 'CV-AI-Agent'
         response.headers['X-Version'] = '1.0.0'
+        if response.status_code >= 500:
+            logger.error(f"Response {response.status_code} for {request.method} {request.path}")
+        elif response.status_code >= 400:
+            logger.warning(f"Response {response.status_code} for {request.method} {request.path}")
+        else:
+            logger.debug(f"Response {response.status_code} for {request.method} {request.path}")
         return response
-    
-    # ====================
-    # UTILITY FUNCTIONS
-    # ====================
-    
-    @app.route('/info')
-    def app_info():
-        """Display application configuration (safe info only)"""
-        safe_config = {
-            'debug': app.config['DEBUG'],
-            'environment': os.environ.get('FLASK_ENV', 'development'),
-            'root_path': app.root_path
-        }
-        return jsonify(safe_config)
-    
+
     return app
 
 
 # ====================
 # ENTRY POINT
 # ====================
-
-if __name__ == '__main__':
-    # Create application instance
+if __name__ == "__main__":
     app = create_app()
-    
-    # Get port from environment or default
-    port = int(os.environ.get('PORT', 5000))
-    
-    # Get host from environment or default
-    # '0.0.0.0' makes it accessible on network, '127.0.0.1' for local only
-    host = os.environ.get('HOST', '127.0.0.1')
-    
-    # Start the server
-    print(f"🚀 CV AI Agent starting on http://{host}:{port}")
-    print(f"📊 Health check: http://{host}:{port}/health")
-    print(f"🔍 App info: http://{host}:{port}/info")
-    print("Press CTRL+C to stop the server")
-    
-    app.run(host=host, port=port, debug=app.config['DEBUG'])
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", 5000))
+    startup_msg = f"🚀 CV AI Agent starting on http://{host}:{port} ({ConfigClass.__name__})"
+    print(startup_msg)
+    logger.info(startup_msg)
+    app.run(host=host, port=port, debug=app.config.get("DEBUG", True))

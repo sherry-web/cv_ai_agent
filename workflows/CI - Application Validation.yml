@@ -1,0 +1,71 @@
+name: CI - Application Validation
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  validate:
+    name: Validate Application Integrity
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify Python environment
+        run: |
+          python --version
+          pip --version
+
+      - name: Validate core module imports
+        run: |
+          python -c "import app; print('✓ app.py imports successfully')"
+          python -c "import wsgi; print('✓ wsgi.py imports successfully')"
+
+      - name: Validate Flask application factory
+        run: |
+          python -c "from app import create_app; app = create_app(); print('✓ Application factory OK')"
+
+      - name: Validate Gunicorn installation
+        run: |
+          gunicorn --version
+
+      - name: Validate environment configuration
+        run: |
+          if [ -f ".env.example" ]; then
+            echo "✓ .env.example found"
+            grep -E "FLASK_DEBUG|SECRET_KEY|PORT" .env.example || true
+          else
+            echo "⚠ .env.example not found"
+          fi
+
+      - name: Validate Docker configuration
+        run: |
+          if [ -f "Dockerfile" ]; then
+            echo "✓ Dockerfile found"
+            head -5 Dockerfile
+          else
+            echo "⚠ Dockerfile not found"
+          fi
+
+      - name: Validate Gunicorn configuration file
+        run: |
+          if [ -f "gunicorn.conf.py" ]; then
+            echo "✓ gunicorn.conf.py found"
+            python -c "import importlib.util; spec = importlib.util.spec_from_file_location('gunicorn_conf', 'gunicorn.conf.py'); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); print('✓ gunicorn.conf.py loads successfully')"
+          else
+            echo "⚠ gunicorn.conf.py not found"
+          fi
